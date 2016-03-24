@@ -75,6 +75,9 @@ _logger = logging.getLogger("rospy.core")
 # teardown dirty than to hang
 _TIMEOUT_SHUTDOWN_JOIN = 5.
 
+from multiprocessing.dummy import Pool
+_threadpool = None
+
 import warnings
 def deprecated(func):
     """This is a decorator which can be used to mark functions
@@ -104,7 +107,7 @@ def parse_rosrpc_uri(uri):
     @raise ParameterInvalid: if uri is not a valid ROSRPC URI
     """
     if uri.startswith(ROSRPC):
-        dest_addr = uri[len(ROSRPC):]            
+        dest_addr = uri[len(ROSRPC):]
     else:
         raise ParameterInvalid("Invalid protocol for ROS service URL: %s"%uri)
     try:
@@ -117,7 +120,7 @@ def parse_rosrpc_uri(uri):
     return dest_addr, dest_port
 
 #########################################################
-        
+
 # rospy logger
 _rospy_logger = logging.getLogger("rospy.internal")
 
@@ -137,7 +140,7 @@ def rospyerr(msg, *args):
 def rospywarn(msg, *args):
     """Internal rospy client library warn logging"""
     _rospy_logger.warn(msg, *args)
-    
+
 logdebug = logging.getLogger('rosout').debug
 
 logwarn = logging.getLogger('rosout').warning
@@ -236,10 +239,10 @@ def configure_logging(node_name, level=logging.INFO):
 class NullHandler(logging.Handler):
     def emit(self, record):
         pass
-    
+
 # keep logging happy until we have the node name to configure with
-logging.getLogger('rospy').addHandler(NullHandler())    
-    
+logging.getLogger('rospy').addHandler(NullHandler())
+
 
 #########################################################
 # Init/Shutdown/Exit API and Handlers
@@ -298,7 +301,7 @@ def is_shutdown_requested():
     received and continues until client shutdown handlers have been
     called.  After client shutdown handlers have been serviced, the
     is_shutdown state becomes true.
-    
+
     @return: True if shutdown has been requested (but possibly not yet initiated)
     @rtype: bool
     """
@@ -347,7 +350,7 @@ def add_client_shutdown_hook(h):
     Add client method to invoke when system shuts down. Unlike
     L{add_shutdown_hook} and L{add_preshutdown_hooks}, these methods
     will be called before any rospy internal shutdown code.
-    
+
     @param h: function with zero args
     @type  h: fn()
     """
@@ -358,7 +361,7 @@ def add_preshutdown_hook(h):
     Add method to invoke when system shuts down. Unlike
     L{add_shutdown_hook}, these methods will be called before any
     other shutdown hooks.
-    
+
     @param h: function that takes in a single string argument (shutdown reason)
     @type  h: fn(str)
     """
@@ -451,17 +454,17 @@ def register_signals():
     """
     _signalChain[signal.SIGTERM] = signal.signal(signal.SIGTERM, _ros_signal)
     _signalChain[signal.SIGINT]  = signal.signal(signal.SIGINT, _ros_signal)
-    
+
 # Validators ######################################
 
 def is_topic(param_name):
     """
     Validator that checks that parameter is a valid ROS topic name
-    """    
+    """
     def validator(param_value, caller_id):
         v = valid_name_validator_resolved(param_name, param_value, caller_id)
         if param_value == '/':
-            raise ParameterInvalid("ERROR: parameter [%s] cannot be the global namespace"%param_name)            
+            raise ParameterInvalid("ERROR: parameter [%s] cannot be the global namespace"%param_name)
         return v
     return validator
 
@@ -477,3 +480,15 @@ def xmlrpcapi(uri):
         return None
     return xmlrpcclient.ServerProxy(uri)
 
+ # Threadpool #################
+
+def init_threadpool(pool_size):
+    global _threadpool
+    if _threadpool is None:
+        _threadpool = Pool(pool_size)
+    else:
+        raise ROSException("Tried initializing threadpool twice")
+
+def get_threadpool():
+    global _threadpool
+    return _threadpool
