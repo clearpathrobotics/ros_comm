@@ -245,6 +245,11 @@ bool execute(const std::string& method, const XmlRpc::XmlRpcValue& request, XmlR
 
   XMLRPCManager::instance()->releaseXMLRPCClient(c);
 
+  if (!payload.valid())
+  {
+    ROS_ERROR_STREAM("Payload invalid, req: " << request.toXml());
+  }
+
   return true;
 }
 
