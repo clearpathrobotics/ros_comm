@@ -2,5 +2,5 @@
 Changelog for package test_rosbag_storage
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-Forthcoming
------------
+1.12.7 (2017-01-23)
+-------------------

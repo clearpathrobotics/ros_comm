@@ -2,8 +2,8 @@
 Changelog for package roscpp
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-Forthcoming
------------
+1.12.7 (2017-01-23)
+-------------------
 * Fix bug in erasing cached XmlRpcClients on shutdown
 * Make operator bool of CachedXmlRpcClient const
 * Use a bool conversion operator for CachedXmlRpcClient instead of a local functor.

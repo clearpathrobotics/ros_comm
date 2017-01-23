@@ -2,8 +2,8 @@
 Changelog for package rosbag_storage
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-Forthcoming
------------
+1.12.7 (2017-01-23)
+-------------------
 * Drop epydoc from rosbag_storage
 * Contributors: Mike Purvis
 

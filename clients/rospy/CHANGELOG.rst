@@ -2,8 +2,8 @@
 Changelog for package rospy
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-Forthcoming
------------
+1.12.7 (2017-01-23)
+-------------------
 * Add throttle digest to bypass throttle if message contents have changed
 * Add the ability to have child loggers that operate at seperate verbosity levels
 * Add logging around publisherUpdate and Inbound failures
