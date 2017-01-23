@@ -2,6 +2,12 @@
 Changelog for package rospy
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
+Forthcoming
+-----------
+* Add throttle digest to bypass throttle if message contents have changed
+* Add the ability to have child loggers that operate at seperate verbosity levels
+* Add logging around publisherUpdate and Inbound failures
+
 1.12.6 (2016-10-26)
 -------------------
 * improve reconnection logic on timeout and other common errors (`#851 <https://github.com/ros/ros_comm/pull/851>`_)

@@ -2,6 +2,10 @@
 Changelog for package rosmaster
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
+Forthcoming
+-----------
+* Add logging around publisherUpdate and Inbound failures
+
 1.12.6 (2016-10-26)
 -------------------
 

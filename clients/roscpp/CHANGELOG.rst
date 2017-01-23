@@ -2,6 +2,17 @@
 Changelog for package roscpp
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
+Forthcoming
+-----------
+* Fix bug in erasing cached XmlRpcClients on shutdown
+* Make operator bool of CachedXmlRpcClient const
+* Use a bool conversion operator for CachedXmlRpcClient instead of a local functor.
+* Avoid deleting XmlRpcClient's while they are being still in use on another thread
+* Add logging around publisherUpdate and Inbound failures
+* Return result of client execute (`#938 <https://github.com/ros/ros_comm/pull/938>`_)
+* Fix WallTimerEvent class -> struct
+* Contributors: Adel Fakih, Denise Eng, Mike Purvis, Tracey Spicer
+
 1.12.6 (2016-10-26)
 -------------------
 
