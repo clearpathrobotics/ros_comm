@@ -68,6 +68,8 @@ from rospy.names import *
 from rospy.impl.validators import ParameterInvalid
 
 from rosgraph_msgs.msg import Log
+from functools import partial
+from collections import namedtuple
 
 _logger = logging.getLogger("rospy.core")
 
@@ -139,39 +141,73 @@ def rospywarn(msg, *args):
     """Internal rospy client library warn logging"""
     _rospy_logger.warn(msg, *args)
     
-logdebug = logging.getLogger('rosout').debug
 
-logwarn = logging.getLogger('rosout').warning
+def _base_logger(msg, *args, **kwargs):
 
-loginfo = logging.getLogger('rosout').info
+    try:
+        name = kwargs.pop('logger_name')
+    except KeyError:
+        name = None
+
+    try:
+        throttle = kwargs.pop('logger_throttle')
+    except KeyError:
+        throttle = None
+
+    try:
+        level = kwargs.pop('logger_level')
+    except KeyError:
+        level = None
+
+    rospy_logger = logging.getLogger('rosout')
+    if name:
+        rospy_logger = rospy_logger.getChild(name)
+    logfunc = getattr(rospy_logger, level)
+
+    if throttle:
+        caller_id = _frame_record_to_caller_id(inspect.stack()[2])
+        _logging_throttle(caller_id, logfunc, throttle, msg, *args)
+    else:
+        logfunc(msg, *args)
+
+
+loginfo = partial(_base_logger, logger_level='info')
+
 logout = loginfo # alias deprecated name
 
-logerr = logging.getLogger('rosout').error
+logdebug = partial(_base_logger, logger_level='debug')
+
+logwarn = partial(_base_logger, logger_level='warn')
+
+logerr = partial(_base_logger, logger_level='error')
+
 logerror = logerr # alias logerr
 
-logfatal = logging.getLogger('rosout').critical
+logfatal = partial(_base_logger, logger_level='critical')
 
 
 class LoggingThrottle(object):
 
-    last_logging_time_table = {}
+    LogEntry = namedtuple("LogEntry", "time digest")
 
-    def __call__(self, caller_id, logging_func, period, msg):
-        """Do logging specified message periodically.
+    last_log_entry = {}
+
+    def __call__(self, caller_id, logging_func, period, msg, *args):
+        """Do logging specified message periodically. Messages with different contents will bypass throttling
 
         - caller_id (str): Id to identify the caller
         - logging_func (function): Function to do logging.
-        - period (float): Period to do logging in second unit.
+        - period (float): Period to do logging in seconds.
         - msg (object): Message to do logging.
         """
         now = rospy.Time.now()
 
-        last_logging_time = self.last_logging_time_table.get(caller_id)
+        last = self.last_log_entry.get(caller_id, self.LogEntry(time=None, digest=None))
+        digest = hash(*args + tuple([str(msg)]))
 
-        if (last_logging_time is None or
-              (now - last_logging_time) > rospy.Duration(period)):
-            logging_func(msg)
-            self.last_logging_time_table[caller_id] = now
+        if (last.time is None or (now - last.time) > rospy.Duration(period) or digest != last.digest):
+            logging_func(msg, *args)
+            self.last_log_entry[caller_id] = self.LogEntry(time=now, digest=digest)
 
 
 _logging_throttle = LoggingThrottle()
@@ -188,28 +224,23 @@ def _frame_record_to_caller_id(frame_record):
 
 
 def logdebug_throttle(period, msg):
-    caller_id = _frame_record_to_caller_id(inspect.stack()[1])
-    _logging_throttle(caller_id, logdebug, period, msg)
+    logdebug(msg, logger_name=None, logger_throttle=period)
 
 
 def loginfo_throttle(period, msg):
-    caller_id = _frame_record_to_caller_id(inspect.stack()[1])
-    _logging_throttle(caller_id, loginfo, period, msg)
+    loginfo(msg, logger_name=None, logger_throttle=period)
 
 
 def logwarn_throttle(period, msg):
-    caller_id = _frame_record_to_caller_id(inspect.stack()[1])
-    _logging_throttle(caller_id, logwarn, period, msg)
+    logwarn(msg, logger_name=None, logger_throttle=period)
 
 
 def logerr_throttle(period, msg):
-    caller_id = _frame_record_to_caller_id(inspect.stack()[1])
-    _logging_throttle(caller_id, logerr, period, msg)
+    logerr(msg, logger_name=None, logger_throttle=period)
 
 
 def logfatal_throttle(period, msg):
-    caller_id = _frame_record_to_caller_id(inspect.stack()[1])
-    _logging_throttle(caller_id, logfatal, period, msg)
+    logfatal(msg, logger_name=None, logger_throttle=period)
 
 
 #########################################################
