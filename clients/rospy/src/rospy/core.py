@@ -207,20 +207,12 @@ class LoggingThrottle(object):
         """
         now = rospy.Time.now()
 
-        last = self.last_log_entry.get(caller_id, self.LogEntry(time=None, digest=None))
-        digest = _get_digest(msg, *args)
+        last_logging_time = self.last_logging_time_table.get(caller_id)
 
-        if (last.time is None or (now - last.time) > rospy.Duration(period) or digest != last.digest):
-            logging_func(msg, *args)
-            self.last_log_entry[caller_id] = self.LogEntry(time=now, digest=digest)
-
-
-def _get_digest(*args):
-    m = hashlib.md5()
-    for arg in args:
-        m.update(str(args))
-    return m.hexdigest()
-
+        if (last_logging_time is None or
+              (now - last_logging_time) > rospy.Duration(period)):
+            logging_func(msg)
+            self.last_logging_time_table[caller_id] = now
 
 _logging_throttle = LoggingThrottle()
 
