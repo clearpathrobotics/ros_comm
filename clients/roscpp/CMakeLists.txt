@@ -115,7 +115,8 @@ add_library(roscpp
   src/libros/spinner.cpp
   src/libros/internal_timer_manager.cpp
   src/libros/message_deserializer.cpp
-  src/libros/poll_set.cpp
+  #src/libros/poll_set.cpp
+  src/libros/epoll_set.cpp
   src/libros/service.cpp
   src/libros/this_node.cpp
   )
@@ -125,6 +126,7 @@ add_dependencies(roscpp ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TA
 target_link_libraries(roscpp
   ${catkin_LIBRARIES}
   ${Boost_LIBRARIES}
+  ev
   )
 
 #explicitly install library and includes
