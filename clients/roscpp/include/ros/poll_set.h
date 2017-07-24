@@ -38,6 +38,7 @@
 #include <vector>
 #include "io.h"
 #include "common.h"
+#include <boost/asio.hpp>
 #include <boost/shared_ptr.hpp>
 #include <boost/function.hpp>
 #include <boost/thread/mutex.hpp>
@@ -47,6 +48,8 @@ namespace ros
 
 class Transport;
 typedef boost::shared_ptr<Transport> TransportPtr;
+typedef boost::shared_ptr<boost::asio::ip::tcp::socket> AsyncTcpSocketPtr;
+typedef boost::shared_ptr<boost::asio::ip::udp::socket> AsyncUdpSocketPtr;
 
 /**
  * \brief Manages a set of sockets being polled through the poll() function call.
@@ -123,18 +126,36 @@ private:
   void createNativePollset();
 
   /**
+   *
+   */
+  void handleWrite(boost::system::error_code ec, int fd);
+
+  /**
+   *
+   */
+  void handleRead(boost::system::error_code ec, int fd);
+
+  /**
    * \brief Called when events have been triggered on our signal pipe
    */
   void onLocalPipeEvents(int events);
 
   struct SocketInfo
   {
+    AsyncTcpSocketPtr tcp_socket_;
+    AsyncUdpSocketPtr udp_socket_;
     TransportPtr transport_;
     SocketUpdateFunc func_;
     int fd_;
     int events_;
   };
   typedef std::map<int, SocketInfo> M_SocketInfo;
+
+  /**
+   *
+   */
+  void startOperations(SocketInfo& info, int events);
+
   M_SocketInfo socket_info_;
   boost::mutex socket_info_mutex_;
   bool sockets_changed_;
@@ -147,6 +168,8 @@ private:
 
   boost::mutex signal_mutex_;
   signal_fd_t signal_pipe_[2];
+
+  boost::asio::io_service io_service_;
 };
 
 }

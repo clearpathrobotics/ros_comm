@@ -46,11 +46,12 @@
 namespace ros
 {
 
+
 PollSet::PollSet()
 : sockets_changed_(false)
 {
-	if ( create_signal_pair(signal_pipe_) != 0 ) {
-        ROS_FATAL("create_signal_pair() failed");
+  if ( create_signal_pair(signal_pipe_) != 0 ) {
+    ROS_FATAL("create_signal_pair() failed");
     ROS_BREAK();
   }
   addSocket(signal_pipe_[0], boost::bind(&PollSet::onLocalPipeEvents, this, _1));
@@ -69,6 +70,56 @@ bool PollSet::addSocket(int fd, const SocketUpdateFunc& update_func, const Trans
   info.events_ = 0;
   info.transport_ = transport;
   info.func_ = update_func;
+
+
+  /** TCP or UDP ??? */
+  int opt_domain = 0;
+  int opt_type = 0;
+  socklen_t optlen = sizeof(int);
+
+  // see if the SO_BROADCAST flag is set:
+  if (getsockopt(fd, SOL_SOCKET, SO_DOMAIN, &opt_domain, &optlen))
+  {
+    ROS_ERROR("getsockopt returned an error: errno %d %s", errno, strerror(errno));
+  }
+  if (getsockopt(fd, SOL_SOCKET, SO_TYPE, &opt_type, &optlen))
+  {
+    ROS_ERROR("getsockopt returned an error: errno %d %s", errno, strerror(errno));
+  }
+
+  if (opt_domain == AF_INET)
+  {
+    if (opt_type == SOCK_STREAM)
+    {
+      info.tcp_socket_ = AsyncTcpSocketPtr(new boost::asio::ip::tcp::socket(io_service_));
+      info.tcp_socket_->assign(boost::asio::ip::tcp::v4(), fd);
+    }
+    else if (opt_type == SOCK_DGRAM)
+    {
+      info.udp_socket_ = AsyncUdpSocketPtr(new boost::asio::ip::udp::socket(io_service_));
+      info.udp_socket_->assign(boost::asio::ip::udp::v4(), fd);
+    }
+  }
+  else if (opt_domain == AF_INET6)
+  {
+    if (opt_type == SOCK_STREAM)
+    {
+      info.tcp_socket_ = AsyncTcpSocketPtr(new boost::asio::ip::tcp::socket(io_service_));
+      info.tcp_socket_->assign(boost::asio::ip::tcp::v6(), fd);
+    }
+    else if (opt_type == SOCK_DGRAM)
+    {
+      info.udp_socket_ = AsyncUdpSocketPtr(new boost::asio::ip::udp::socket(io_service_));
+      info.udp_socket_->assign(boost::asio::ip::udp::v6(), fd);
+    }
+  }
+
+  if (!info.tcp_socket_ && !info.udp_socket_)
+  {
+    ROS_WARN("Socket family / type combination not supported %d / %d", opt_domain, opt_type);
+  }
+  /** */
+
 
   {
     boost::mutex::scoped_lock lock(socket_info_mutex_);
@@ -132,6 +183,8 @@ bool PollSet::addEvents(int sock, int events)
 
   it->second.events_ |= events;
 
+  startOperations(it->second, events);
+
   signal();
 
   return true;
@@ -152,6 +205,8 @@ bool PollSet::delEvents(int sock, int events)
     return false;
   }
 
+  startOperations(it->second, events);
+
   signal();
 
   return true;
@@ -171,9 +226,15 @@ void PollSet::signal()
   }
 }
 
-
 void PollSet::update(int poll_timeout)
 {
+  boost::asio::deadline_timer t(io_service_, boost::posix_time::milliseconds(poll_timeout));
+  t.async_wait(boost::bind(&boost::asio::io_service::stop, &io_service_));
+
+  io_service_.reset();
+  io_service_.run();
+
+#if 0
   createNativePollset();
 
   // Poll across the sockets we're servicing
@@ -249,6 +310,7 @@ void PollSet::update(int poll_timeout)
     boost::mutex::scoped_lock lock(just_deleted_mutex_);
     just_deleted_.clear();
   }
+#endif
 }
 
 void PollSet::createNativePollset()
@@ -286,5 +348,138 @@ void PollSet::onLocalPipeEvents(int events)
   }
 
 }
+
+void PollSet::handleRead(boost::system::error_code ec, int fd)
+{
+  SocketUpdateFunc func;
+  TransportPtr transport;
+  int events = 0;
+
+  {
+    boost::mutex::scoped_lock lock(socket_info_mutex_);
+    M_SocketInfo::iterator it = socket_info_.find(fd);
+    // the socket has been entirely deleted
+    if (it == socket_info_.end())
+    {
+      return;
+    }
+
+    SocketInfo& info = it->second;
+    func = info.func_;
+    transport = info.transport_;
+    events = info.events_;
+  }
+
+  if (!ec && func) {
+    func(POLLIN);
+  } else {
+    ROS_WARN("GA GA: %d %04X %d", __LINE__, events, ec );
+  }
+
+  if (!ec || ec == boost::asio::error::would_block)
+  {
+    boost::mutex::scoped_lock lock(socket_info_mutex_);
+    M_SocketInfo::iterator it = socket_info_.find(fd);
+    // the socket has been entirely deleted
+    if (it == socket_info_.end())
+    {
+      return;
+    }
+
+    SocketInfo& info = it->second;
+    startOperations(info, POLLIN);
+  }
+}
+
+void PollSet::handleWrite(boost::system::error_code ec, int fd)
+{
+  SocketUpdateFunc func;
+  TransportPtr transport;
+  int events = 0;
+
+  {
+    boost::mutex::scoped_lock lock(socket_info_mutex_);
+    M_SocketInfo::iterator it = socket_info_.find(fd);
+    // the socket has been entirely deleted
+    if (it == socket_info_.end())
+    {
+      return;
+    }
+
+    SocketInfo& info = it->second;
+    func = info.func_;
+    transport = info.transport_;
+    events = info.events_;
+  }
+
+  if (!ec && func) {
+    func(POLLOUT);
+  } else {
+    ROS_WARN("GA GA: %d %04X %d", __LINE__, events, ec );
+  }
+
+  if (!ec || ec == boost::asio::error::would_block)
+  {
+    boost::mutex::scoped_lock lock(socket_info_mutex_);
+    M_SocketInfo::iterator it = socket_info_.find(fd);
+    // the socket has been entirely deleted
+    if (it == socket_info_.end())
+    {
+      return;
+    }
+
+    SocketInfo& info = it->second;
+    startOperations(info, POLLOUT);
+  }
+}
+
+void PollSet::startOperations(SocketInfo& info, int events)
+{
+  if ((info.events_ & events) & (POLLIN | POLLPRI))
+  {
+    if (info.tcp_socket_)
+    {
+      info.tcp_socket_->async_read_some(
+          boost::asio::null_buffers(),
+          boost::bind(&PollSet::handleRead,
+                      this,
+                      boost::asio::placeholders::error,
+                      info.fd_));
+    }
+    if (info.udp_socket_)
+    {
+      info.udp_socket_->async_receive(
+          boost::asio::null_buffers(),
+          boost::bind(&PollSet::handleRead,
+                      this,
+                      boost::asio::placeholders::error,
+                      info.fd_));
+    }
+  }
+
+  if ((info.events_ & events) & POLLOUT)
+  {
+    if (info.tcp_socket_)
+    {
+      info.tcp_socket_->async_write_some(
+          boost::asio::null_buffers(),
+          boost::bind(&PollSet::handleWrite,
+                      this,
+                      boost::asio::placeholders::error,
+                      info.fd_));
+    }
+    if (info.udp_socket_)
+    {
+      info.udp_socket_->async_send(
+          boost::asio::null_buffers(),
+          boost::bind(&PollSet::handleWrite,
+                      this,
+                      boost::asio::placeholders::error,
+                      info.fd_));
+
+    }
+  }
+}
+
 
 }
