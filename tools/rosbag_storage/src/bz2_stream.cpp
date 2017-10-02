@@ -70,6 +70,9 @@ void BZ2Stream::startWrite() {
 }
 
 void BZ2Stream::write(void* ptr, size_t size) {
+    if (!bzfile_) {
+        throw BagException("cannot write to bzfile yet opened");
+    }
     BZ2_bzWrite(&bzerror_, bzfile_, ptr, size);
 
     switch (bzerror_) {
@@ -80,6 +83,9 @@ void BZ2Stream::write(void* ptr, size_t size) {
 }
 
 void BZ2Stream::stopWrite() {
+    if (!bzfile_) {
+        throw BagException("cannot close bzfile yet opened");
+    }
     unsigned int nbytes_in;
     unsigned int nbytes_out;
     BZ2_bzWriteClose(&bzerror_, bzfile_, 0, &nbytes_in, &nbytes_out);
@@ -107,6 +113,9 @@ void BZ2Stream::startRead() {
 }
 
 void BZ2Stream::read(void* ptr, size_t size) {
+    if (!bzfile_) {
+        throw BagException("cannot read from bzfile yet opened");
+    }
     BZ2_bzRead(&bzerror_, bzfile_, ptr, size);
 
     advanceOffset(size);
@@ -133,6 +142,9 @@ void BZ2Stream::read(void* ptr, size_t size) {
 }
 
 void BZ2Stream::stopRead() {
+    if (!bzfile_) {
+        throw BagException("cannot close bzfile yet opened");
+    }
     BZ2_bzReadClose(&bzerror_, bzfile_);
 
     switch (bzerror_) {
