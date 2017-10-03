@@ -38,7 +38,7 @@ add_library(rosbag_storage
   src/uncompressed_stream.cpp
 )
 
-target_link_libraries(rosbag_storage ${catkin_LIBRARIES} ${Boost_LIBRARIES} ${BZIP2_LIBRARIES} ${console_bridge_LIBRARIES})
+target_link_libraries(rosbag_storage ${catkin_LIBRARIES} ${Boost_LIBRARIES} ${BZIP2_LIBRARIES} ${console_bridge_LIBRARIES} crypto gpgme)
 
 install(TARGETS rosbag_storage
   ARCHIVE DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}

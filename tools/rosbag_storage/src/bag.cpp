@@ -40,6 +40,7 @@
 #include <iomanip>
 
 #include <boost/foreach.hpp>
+#include <openssl/rand.h>
 
 #include "console_bridge/console.h"
 
@@ -56,6 +57,160 @@ using ros::M_string;
 using ros::Time;
 
 namespace rosbag {
+
+static void initGpgme() {
+    // Check version method must be called before en/decryption
+    gpgme_check_version(0);
+    // Set locale
+    setlocale(LC_ALL, "");
+    gpgme_set_locale(NULL, LC_CTYPE, setlocale(LC_CTYPE, NULL));
+#ifdef LC_MESSAGES
+    gpgme_set_locale(NULL, LC_MESSAGES, setlocale(LC_MESSAGES, NULL));
+#endif
+}
+
+static void getGpgKey(gpgme_ctx_t &ctx, std::string const& user, gpgme_key_t& key) {
+    // Get GPG key corresponding to given user name
+    gpgme_error_t err;
+    // Asterisk means an arbitrary user.
+    if (user == std::string("*")) {
+        err = gpgme_op_keylist_start(ctx, 0, 0);
+    } else {
+        err = gpgme_op_keylist_start(ctx, user.c_str(), 0);
+    }
+    if (err != GPG_ERR_NO_ERROR) {
+        throw BagException((format("Failed to call gpgme_op_keylist_start: %1%") % gpgme_strerror(err)).str());
+    }
+    while (true) {
+        err = gpgme_op_keylist_next(ctx, &key);
+        if (err == GPG_ERR_NO_ERROR) {
+            if (user == std::string("*") || strcmp(key->uids->name, user.c_str()) == 0) {
+                break;
+            }
+            gpgme_key_release(key);
+        } else {
+            if (user == std::string("*")) {
+                // A method throws an exception (instead of returning a specific value) if key is not found
+                // We don't want to change all the client source code to process the return value
+                throw BagException("GPG key not found");
+            } else {
+                throw BagException((format("GPG key not found for a user %1%") % user.c_str()).str());
+            }
+        }
+    }
+    err = gpgme_op_keylist_end(ctx);
+    if (err != GPG_ERR_NO_ERROR) {
+        throw BagException((format("Failed to call gpgme_op_keylist_end: %1%") % gpgme_strerror(err)).str());
+    }
+}
+
+static std::string encryptString(std::string const& user, std::basic_string<unsigned char> const& input) {
+    initGpgme();
+
+    gpgme_ctx_t ctx;
+    gpgme_error_t err = gpgme_new(&ctx);
+    if (err != GPG_ERR_NO_ERROR) {
+        throw BagException((format("Failed to create a GPG context: %1%") % gpgme_strerror(err)).str());
+    }
+
+    gpgme_key_t keys[2] = {NULL, NULL};
+    getGpgKey(ctx, user, keys[0]);
+
+    gpgme_data_t input_data;
+    err = gpgme_data_new_from_mem(&input_data, reinterpret_cast<const char *>(input.c_str()), input.length(), 1);
+    if (err != GPG_ERR_NO_ERROR) {
+        gpgme_release(ctx);
+        throw BagException((format("Failed to encrypt string: gpgme_data_new_from_mem returned %1%") % gpgme_strerror(err)).str());
+    }
+    gpgme_data_t output_data;
+    err = gpgme_data_new(&output_data);
+    if (err != GPG_ERR_NO_ERROR) {
+        gpgme_data_release(input_data);
+        gpgme_release(ctx);
+        throw BagException((format("Failed to encrypt string: gpgme_data_new returned %1%") % gpgme_strerror(err)).str());
+    }
+    err = gpgme_op_encrypt(ctx, keys, static_cast<gpgme_encrypt_flags_t>(GPGME_ENCRYPT_ALWAYS_TRUST), input_data, output_data);
+    if (err != GPG_ERR_NO_ERROR) {
+        gpgme_data_release(output_data);
+        gpgme_data_release(input_data);
+        gpgme_release(ctx);
+        throw BagException((format("Failed to encrypt: %1%") % gpgme_strerror(err)).str());
+    }
+    gpgme_key_release(keys[0]);
+    std::size_t output_length = gpgme_data_seek(output_data, 0, SEEK_END);
+    std::string output(output_length, 0);
+    gpgme_data_seek(output_data, 0, SEEK_SET);
+    ssize_t bytes_read = gpgme_data_read(output_data, &output[0], output_length);
+    // Release resources and return
+    gpgme_data_release(output_data);
+    gpgme_data_release(input_data);
+    gpgme_release(ctx);
+    if (-1 == bytes_read) {
+        throw BagException("Failed to read encrypted string");
+    }
+    return output;
+}
+
+static std::basic_string<unsigned char> decryptString(std::string const& input) {
+    initGpgme();
+
+    gpgme_ctx_t ctx;
+    gpgme_error_t err = gpgme_new(&ctx);
+    if (err != GPG_ERR_NO_ERROR) {
+        throw BagException((format("Failed to create a GPG context: %1%") % gpgme_strerror(err)).str());
+    }
+
+    gpgme_data_t input_data;
+    err = gpgme_data_new_from_mem(&input_data, input.c_str(), input.length(), 1);
+    if (err != GPG_ERR_NO_ERROR) {
+        gpgme_release(ctx);
+        throw BagException((format("Failed to decrypt string: gpgme_data_new_from_mem returned %1%") % gpgme_strerror(err)).str());
+    }
+    gpgme_data_t output_data;
+    err = gpgme_data_new(&output_data);
+    if (err != GPG_ERR_NO_ERROR) {
+        gpgme_data_release(input_data);
+        gpgme_release(ctx);
+        throw BagException((format("Failed to decrypt string: gpgme_data_new returned %1%") % gpgme_strerror(err)).str());
+    }
+    err = gpgme_op_decrypt(ctx, input_data, output_data);
+    if (err != GPG_ERR_NO_ERROR) {
+        gpgme_data_release(output_data);
+        gpgme_data_release(input_data);
+        gpgme_release(ctx);
+        throw BagException((format("Failed to decrypt: %1%") % gpgme_strerror(err)).str());
+    }
+    std::size_t output_length = gpgme_data_seek(output_data, 0, SEEK_END);
+    if (output_length != AES_BLOCK_SIZE) {
+        gpgme_data_release(output_data);
+        gpgme_data_release(input_data);
+        gpgme_release(ctx);
+        throw BagException("Decrypted string length mismatches");
+    }
+    std::basic_string<unsigned char> output(output_length, 0);
+    gpgme_data_seek(output_data, 0, SEEK_SET);
+    ssize_t bytes_read = gpgme_data_read(output_data, reinterpret_cast<char *>(&output[0]), output_length);
+    // Release resources and return
+    gpgme_data_release(output_data);
+    gpgme_data_release(input_data);
+    gpgme_release(ctx);
+    if (-1 == bytes_read) {
+        throw BagException("Failed to read decrypted symmetric key");
+    }
+    return output;
+}
+
+static AES_KEY getAesEncryptionKey(std::basic_string<unsigned char> const& symmetric_key) {
+    AES_KEY encrypt_key;
+    AES_set_encrypt_key(&symmetric_key[0], AES_BLOCK_SIZE*8, &encrypt_key);
+    return encrypt_key;
+}
+
+static AES_KEY getAesDecryptionKey(std::basic_string<unsigned char> const& symmetric_key) {
+    AES_KEY decrypt_key;
+    AES_set_decrypt_key(&symmetric_key[0], AES_BLOCK_SIZE*8, &decrypt_key);
+    return decrypt_key;
+}
 
 Bag::Bag() :
     mode_(bagmode::Write),
@@ -90,6 +245,19 @@ Bag::Bag(string const& filename, uint32_t mode) :
     decompressed_chunk_(0)
 {
     open(filename, mode);
+}
+
+void Bag::buildSymmetricKey() {
+    // Compose a new symmetric key for a bag file to be written
+    if (encryption_user_.empty()) {
+        return;
+    }
+    symmetric_key_.resize(AES_BLOCK_SIZE);
+    if (!RAND_bytes(&symmetric_key_[0], AES_BLOCK_SIZE)) {
+        throw BagException("Failed to build symmetric key");
+    }
+    // Encrypted session key is written in bag file header
+    encrypted_symmetric_key_ = encryptString(encryption_user_, symmetric_key_);
 }
 
 Bag::~Bag() {
@@ -206,6 +374,33 @@ void Bag::setCompression(CompressionType compression) {
     }
 
     compression_ = compression;
+}
+
+inline std::string Bag::getEncryptionUser() const { return encryption_user_; }
+
+void Bag::setEncryptionUser(std::string const& encryption_user) {
+    if (!chunks_.empty()) {
+        // Cannot set encryption user and compose symmetric key if there exist chunks already written
+        throw BagException(
+            (format("Cannot set encryption user as %i chunk(s) have been written") % chunks_.size()).str());
+    }
+
+    // Encryption user can be set only when writing a bag file
+    if (mode_ != bagmode::Write) {
+        throw BagException(
+            (format("Cannot set encryption user as file mode is %i") % mode_).str());
+    }
+    if (encryption_user_ == encryption_user) {
+        return;
+    }
+    if (encryption_user_.empty()) {
+        encryption_user_ = encryption_user;
+        buildSymmetricKey();
+    } else {
+        // Encryption user cannot change once set
+        throw BagException(
+            (format("Encryption user has already been set to %s") % encryption_user_.c_str()).str());
+    }
 }
 
 // Version
@@ -348,6 +543,8 @@ void Bag::writeFileHeaderRecord() {
     header[INDEX_POS_FIELD_NAME]        = toHeaderString(&index_data_pos_);
     header[CONNECTION_COUNT_FIELD_NAME] = toHeaderString(&connection_count_);
     header[CHUNK_COUNT_FIELD_NAME]      = toHeaderString(&chunk_count_);
+    header[ENCRYPTION_USER_FIELD_NAME]  = encryption_user_;
+    header[ENCRYPTED_KEY_FIELD_NAME]    = encrypted_symmetric_key_;
 
     boost::shared_array<uint8_t> header_buffer;
     uint32_t header_len;
@@ -388,6 +585,14 @@ void Bag::readFileHeaderRecord() {
     if (version_ >= 200) {
         readField(fields, CONNECTION_COUNT_FIELD_NAME, true, &connection_count_);
         readField(fields, CHUNK_COUNT_FIELD_NAME,      true, &chunk_count_);
+        readField(fields, ENCRYPTION_USER_FIELD_NAME, 0, UINT_MAX, false, encryption_user_);
+        readField(fields, ENCRYPTED_KEY_FIELD_NAME, 0, UINT_MAX, false, encrypted_symmetric_key_);
+        if (!encrypted_symmetric_key_.empty()) {
+            if (encryption_user_.empty()) {
+                throw BagFormatException("Encrypted symmetric key is found, but not an encryption user");
+            }
+            symmetric_key_ = decryptString(encrypted_symmetric_key_);
+        }
     }
 
     logDebug("Read FILE_HEADER: index_pos=%llu connection_count=%d chunk_count=%d",
@@ -431,6 +636,11 @@ void Bag::stopWritingChunk() {
     file_.setWriteMode(compression::Uncompressed);
     uint32_t compressed_size = file_.getOffset() - curr_chunk_data_pos_;
 
+    if (!symmetric_key_.empty()) {
+        // Actually, this is encrypted chunk size; compressed size can be deduced from decrypted chunk
+        compressed_size = encryptChunk(compressed_size);
+    }
+
     // Rewrite the chunk header with the size of the chunk (remembering current offset)
     uint64_t end_of_chunk_pos = file_.getOffset();
 
@@ -447,6 +657,25 @@ void Bag::stopWritingChunk() {
     
     // Flag that we're starting a new chunk
     chunk_open_ = false;
+}
+
+uint32_t Bag::encryptChunk(const uint32_t compressed_size) {
+    // Read existing (compressed) chunk
+    std::basic_string<unsigned char> compressed_chunk(compressed_size, 0);
+    seek(curr_chunk_data_pos_);
+    file_.read((char*) &compressed_chunk[0], compressed_size);
+    // Apply PKCS#7 padding to the chunk
+    std::size_t pad_size = AES_BLOCK_SIZE - compressed_size % AES_BLOCK_SIZE;
+    compressed_chunk.resize(compressed_chunk.length() + pad_size, pad_size);
+    // Encrypt chunk
+    std::basic_string<unsigned char> encrypted_chunk(compressed_chunk.length(), 0);
+    AES_KEY aes_encryption_key = getAesEncryptionKey(symmetric_key_);
+    std::basic_string<unsigned char> iv(AES_BLOCK_SIZE, 0);
+    AES_cbc_encrypt(&compressed_chunk[0], &encrypted_chunk[0], encrypted_chunk.length(), &aes_encryption_key, &iv[0], AES_ENCRYPT);
+    // Write encrypted chunk
+    seek(curr_chunk_data_pos_);
+    file_.write((char*) &encrypted_chunk[0], encrypted_chunk.length());
+    return encrypted_chunk.length();
 }
 
 void Bag::writeChunkHeader(CompressionType compression, uint32_t compressed_size, uint32_t uncompressed_size) {
@@ -587,10 +816,10 @@ void Bag::readConnectionIndexRecord200() {
     if (!readHeader(header) || !readDataLength(data_size))
         throw BagFormatException("Error reading INDEX_DATA header");
     M_string& fields = *header.getValues();
-    
+
     if (!isOp(fields, OP_INDEX_DATA))
         throw BagFormatException("Expected INDEX_DATA record");
-    
+
     uint32_t index_version;
     uint32_t connection_id;
     uint32_t count = 0;
@@ -646,9 +875,13 @@ void Bag::writeConnectionRecord(ConnectionInfo const* connection_info) {
     header[OP_FIELD_NAME]         = toHeaderString(&OP_CONNECTION);
     header[TOPIC_FIELD_NAME]      = connection_info->topic;
     header[CONNECTION_FIELD_NAME] = toHeaderString(&connection_info->id);
-    writeHeader(header);
-
-    writeHeader(*connection_info->header);
+    if (!symmetric_key_.empty()) {
+        writeEncryptedHeader(header);
+        writeEncryptedHeader(*connection_info->header);
+    } else {
+        writeHeader(header);
+        writeHeader(*connection_info->header);
+    }
 }
 
 void Bag::appendConnectionRecordToBuffer(Buffer& buf, ConnectionInfo const* connection_info) {
@@ -663,8 +896,13 @@ void Bag::appendConnectionRecordToBuffer(Buffer& buf, ConnectionInfo const* conn
 
 void Bag::readConnectionRecord() {
     ros::Header header;
-    if (!readHeader(header))
-        throw BagFormatException("Error reading CONNECTION header");
+    if (!symmetric_key_.empty()) {
+        if (!readEncryptedHeader(header))
+            throw BagFormatException("Error reading CONNECTION header");
+    } else {
+        if (!readHeader(header))
+            throw BagFormatException("Error reading CONNECTION header");
+    }
     M_string& fields = *header.getValues();
 
     if (!isOp(fields, OP_CONNECTION))
@@ -676,8 +914,13 @@ void Bag::readConnectionRecord() {
     readField(fields, TOPIC_FIELD_NAME,      true, topic);
 
     ros::Header connection_header;
-    if (!readHeader(connection_header))
-        throw BagFormatException("Error reading connection header");
+    if (!symmetric_key_.empty()) {
+        if (!readEncryptedHeader(connection_header))
+            throw BagFormatException("Error reading connection header");
+    } else {
+        if (!readHeader(connection_header))
+            throw BagFormatException("Error reading connection header");
+    }
 
     // If this is a new connection, update connections
     map<uint32_t, ConnectionInfo*>::iterator key = connections_.find(id);
@@ -772,6 +1015,26 @@ void Bag::decompressChunk(uint64_t chunk_pos) const {
     decompressed_chunk_ = chunk_pos;
 }
 
+void Bag::decryptChunk(ChunkHeader const& chunk_header, Buffer &decrypted_chunk) const {
+    // Test encrypted chunk size
+    if (chunk_header.compressed_size % AES_BLOCK_SIZE != 0) {
+        throw BagFormatException("Error in encrypted chunk size");
+    }
+    // Read encrypted chunk
+    std::basic_string<unsigned char> encrypted_chunk(chunk_header.compressed_size, 0);
+    file_.read((char*) &encrypted_chunk[0], chunk_header.compressed_size);
+    // Decrypt chunk
+    decrypted_chunk.setSize(chunk_header.compressed_size);
+    AES_KEY aes_decryption_key = getAesDecryptionKey(symmetric_key_);
+    std::basic_string<unsigned char> iv(AES_BLOCK_SIZE, 0);
+    AES_cbc_encrypt(&encrypted_chunk[0], (unsigned char*) decrypted_chunk.getData(), chunk_header.compressed_size,
+        &aes_decryption_key, &iv[0], AES_DECRYPT);
+    if (decrypted_chunk.getSize() == 0) {
+        throw BagFormatException("Decrypted chunk is empty");
+    }
+    decrypted_chunk.setSize(decrypted_chunk.getSize() - *(decrypted_chunk.getData()+decrypted_chunk.getSize()-1));
+}
+
 void Bag::readMessageDataRecord102(uint64_t offset, ros::Header& header) const {
     logDebug("readMessageDataRecord: offset=%llu", (unsigned long long) offset);
 
@@ -797,12 +1060,17 @@ void Bag::readMessageDataRecord102(uint64_t offset, ros::Header& header) const {
 // Reading this into a buffer isn't completely necessary, but we do it anyways for now
 void Bag::decompressRawChunk(ChunkHeader const& chunk_header) const {
     assert(chunk_header.compression == COMPRESSION_NONE);
-    assert(chunk_header.compressed_size == chunk_header.uncompressed_size);
 
     logDebug("compressed_size: %d uncompressed_size: %d", chunk_header.compressed_size, chunk_header.uncompressed_size);
 
-    decompress_buffer_.setSize(chunk_header.compressed_size);
-    file_.read((char*) decompress_buffer_.getData(), chunk_header.compressed_size);
+    if (!symmetric_key_.empty()) {
+        decryptChunk(chunk_header, decompress_buffer_);
+    } else {
+        assert(chunk_header.compressed_size == chunk_header.uncompressed_size);
+
+        decompress_buffer_.setSize(chunk_header.compressed_size);
+        file_.read((char*) decompress_buffer_.getData(), chunk_header.compressed_size);
+    }
 
     // todo check read was successful
 }
@@ -814,8 +1082,12 @@ void Bag::decompressBz2Chunk(ChunkHeader const& chunk_header) const {
 
     logDebug("compressed_size: %d uncompressed_size: %d", chunk_header.compressed_size, chunk_header.uncompressed_size);
 
-    chunk_buffer_.setSize(chunk_header.compressed_size);
-    file_.read((char*) chunk_buffer_.getData(), chunk_header.compressed_size);
+    if (!symmetric_key_.empty()) {
+        decryptChunk(chunk_header, chunk_buffer_);
+    } else {
+        chunk_buffer_.setSize(chunk_header.compressed_size);
+        file_.read((char*) chunk_buffer_.getData(), chunk_header.compressed_size);
+    }
 
     decompress_buffer_.setSize(chunk_header.uncompressed_size);
     file_.decompress(compression, decompress_buffer_.getData(), decompress_buffer_.getSize(), chunk_buffer_.getData(), chunk_buffer_.getSize());
@@ -831,8 +1103,12 @@ void Bag::decompressLz4Chunk(ChunkHeader const& chunk_header) const {
     logDebug("lz4 compressed_size: %d uncompressed_size: %d",
              chunk_header.compressed_size, chunk_header.uncompressed_size);
 
-    chunk_buffer_.setSize(chunk_header.compressed_size);
-    file_.read((char*) chunk_buffer_.getData(), chunk_header.compressed_size);
+    if (!symmetric_key_.empty()) {
+        decryptChunk(chunk_header, chunk_buffer_);
+    } else {
+        chunk_buffer_.setSize(chunk_header.compressed_size);
+        file_.read((char*) chunk_buffer_.getData(), chunk_header.compressed_size);
+    }
 
     decompress_buffer_.setSize(chunk_header.uncompressed_size);
     file_.decompress(compression, decompress_buffer_.getData(), decompress_buffer_.getSize(), chunk_buffer_.getData(), chunk_buffer_.getSize());
@@ -970,6 +1246,25 @@ void Bag::writeHeader(M_string const& fields) {
     write((char*) header_buffer.get(), header_len);
 }
 
+void Bag::writeEncryptedHeader(M_string const& fields) {
+    boost::shared_array<uint8_t> header_buffer;
+    uint32_t header_len;
+    ros::Header::write(fields, header_buffer, header_len);
+    // Apply PKCS#7 padding to the header
+    std::size_t pad_size = AES_BLOCK_SIZE - header_len % AES_BLOCK_SIZE;
+    uint32_t encrypted_buffer_size = header_len + pad_size;
+    std::basic_string<unsigned char> header_buffer_with_pad(encrypted_buffer_size, pad_size);
+    memcpy(&header_buffer_with_pad[0], header_buffer.get(), header_len);
+    // Encrypt chunk
+    std::basic_string<unsigned char> encrypted_buffer(encrypted_buffer_size, 0);
+    AES_KEY aes_encryption_key = getAesEncryptionKey(symmetric_key_);
+    std::basic_string<unsigned char> iv(AES_BLOCK_SIZE, 0);
+    AES_cbc_encrypt(&header_buffer_with_pad[0], &encrypted_buffer[0], encrypted_buffer_size, &aes_encryption_key, &iv[0], AES_ENCRYPT);
+    // Write
+    write((char*) &encrypted_buffer_size, 4);
+    write((char*) &encrypted_buffer[0], encrypted_buffer_size);
+}
+
 void Bag::writeDataLength(uint32_t data_len) {
     write((char*) &data_len, 4);
 }
@@ -1055,6 +1350,36 @@ bool Bag::readHeader(ros::Header& header) const {
     // Parse the header
     string error_msg;
     bool parsed = header.parse(header_buffer_.getData(), header_len, error_msg);
+    if (!parsed)
+        return false;
+
+    return true;
+}
+
+bool Bag::readEncryptedHeader(ros::Header& header) const {
+    // Read the encrypted header length
+    uint32_t encrypted_header_len;
+    read((char*) &encrypted_header_len, 4);
+    if (encrypted_header_len % AES_BLOCK_SIZE != 0) {
+        throw BagFormatException("Error in encrypted header length");
+    }
+    // Read encrypted header
+    std::basic_string<unsigned char> encrypted_header(encrypted_header_len, 0);
+    read((char*) &encrypted_header[0], encrypted_header_len);
+    // Decrypt header
+    header_buffer_.setSize(encrypted_header_len);
+    AES_KEY aes_decryption_key = getAesDecryptionKey(symmetric_key_);
+    std::basic_string<unsigned char> iv(AES_BLOCK_SIZE, 0);
+    AES_cbc_encrypt(&encrypted_header[0], (unsigned char*) header_buffer_.getData(), encrypted_header_len,
+        &aes_decryption_key, &iv[0], AES_DECRYPT);
+    if (header_buffer_.getSize() == 0) {
+        throw BagFormatException("Decrypted header is empty");
+    }
+    header_buffer_.setSize(header_buffer_.getSize() - *(header_buffer_.getData()+header_buffer_.getSize()-1));
+
+    // Parse the header
+    string error_msg;
+    bool parsed = header.parse(header_buffer_.getData(), header_buffer_.getSize(), error_msg);
     if (!parsed)
         return false;
 
