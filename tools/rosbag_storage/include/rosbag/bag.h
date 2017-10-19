@@ -60,6 +60,9 @@
 #include <boost/format.hpp>
 #include <boost/iterator/iterator_facade.hpp>
 
+#include <gpgme.h>
+#include <openssl/aes.h>
+
 #include "console_bridge/console.h"
 
 namespace rosbag {
@@ -121,6 +124,8 @@ public:
     CompressionType getCompression() const;                       //!< Get the compression method to use for writing chunks
     void            setChunkThreshold(uint32_t chunk_threshold);  //!< Set the threshold for creating new chunks
     uint32_t        getChunkThreshold() const;                    //!< Get the threshold for creating new chunks
+    void            setEncryptionUser(std::string const& encryption_user);  //!< Set the user name of key used for symmetric key encryption
+    std::string     getEncryptionUser() const;                    //!< Get the user name of key used for symmetric key encryption
 
     //! Write a message into the bag file
     /*!
@@ -177,6 +182,8 @@ private:
     Bag(const Bag&);
     Bag& operator=(const Bag&);
 
+    void buildSymmetricKey();
+
     // This helper function actually does the write with an arbitrary serializable message
     template<class T>
     void doWrite(std::string const& topic, ros::Time const& time, T const& msg, boost::shared_ptr<ros::M_string> const& connection_header);
@@ -208,6 +215,7 @@ private:
     void writeConnectionRecords();
     void writeChunkInfoRecords();
     void startWritingChunk(ros::Time time);
+    uint32_t encryptChunk(const uint32_t compressed_size);
     void writeChunkHeader(CompressionType compression, uint32_t compressed_size, uint32_t uncompressed_size);
     void stopWritingChunk();
 
@@ -231,6 +239,7 @@ private:
     void readMessageDataIntoStream(IndexEntry const& index_entry, Stream& stream) const;
 
     void     decompressChunk(uint64_t chunk_pos) const;
+    void     decryptChunk(ChunkHeader const& chunk_header, Buffer &decrypted_chunk) const;
     void     decompressRawChunk(ChunkHeader const& chunk_header) const;
     void     decompressBz2Chunk(ChunkHeader const& chunk_header) const;
     void     decompressLz4Chunk(ChunkHeader const& chunk_header) const;
@@ -239,6 +248,7 @@ private:
     // Record header I/O
 
     void writeHeader(ros::M_string const& fields);
+    void writeEncryptedHeader(ros::M_string const& fields);
     void writeDataLength(uint32_t data_len);
     void appendHeaderToBuffer(Buffer& buf, ros::M_string const& fields);
     void appendDataLengthToBuffer(Buffer& buf, uint32_t data_len);
@@ -246,6 +256,7 @@ private:
     void readHeaderFromBuffer(Buffer& buffer, uint32_t offset, ros::Header& header, uint32_t& data_size, uint32_t& bytes_read) const;
     void readMessageDataHeaderFromBuffer(Buffer& buffer, uint32_t offset, ros::Header& header, uint32_t& data_size, uint32_t& bytes_read) const;
     bool readHeader(ros::Header& header) const;
+    bool readEncryptedHeader(ros::Header& header) const;
     bool readDataLength(uint32_t& data_size) const;
     bool isOp(ros::M_string& fields, uint8_t reqOp) const;
 
@@ -313,6 +324,10 @@ private:
     mutable Buffer*  current_buffer_;
 
     mutable uint64_t decompressed_chunk_;      //!< position of decompressed chunk
+
+    std::string encryption_user_;          //!< user name of GPG key used for symmetric key encryption; empty means no encryption
+    std::basic_string<unsigned char> symmetric_key_;  //!< symmetric key for encryption/decryption
+    std::string encrypted_symmetric_key_;  //!< encrypted symmetric key
 };
 
 } // namespace rosbag
