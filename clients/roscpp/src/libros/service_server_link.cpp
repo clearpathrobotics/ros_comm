@@ -196,6 +196,11 @@ void ServiceServerLink::onResponseOkAndLength(const ConnectionPtr& conn, const b
   uint8_t ok = buffer[0];
   uint32_t len = *((uint32_t*)(buffer.get() + 1));
 
+  // NIM-4209
+  // buckets correspond to <1mb, 1-10mb, 10-100mb, >100mb buffer sizes
+  int bucket = (len<1000000) ? 1 : (len<10000000) ? 2 : (len<100000000) ? 3 : 4;
+  ROS_INFO("service_server_link buffer size bucket: %i", bucket);
+
   if (len > 1000000000)
   {
     ROS_ERROR("a message of over a gigabyte was " \
