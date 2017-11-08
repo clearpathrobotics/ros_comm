@@ -168,9 +168,7 @@ void TransportPublisherLink::onMessageLength(const ConnectionPtr& conn, const bo
   uint32_t len = *((uint32_t*)buffer.get());
 
   // NIM-4209
-  // buckets correspond to <1mb, 1-10mb, 10-100mb, >100mb buffer sizes
-  int bucket = (len<1000000) ? 1 : (len<10000000) ? 2 : (len<100000000) ? 3 : 4;
-  ROS_INFO("transport_publisher_link buffer size bucket: %i", bucket);
+  ROS_INFO("buffer size: %i", len);
 
   if (len > 1000000000)
   {
