@@ -190,7 +190,7 @@ void ServiceClientLink::onRequestLength(const ConnectionPtr& conn, const boost::
 
   if (len > 1000000)
   {
-    ROS_ERROR("a message of size %s was " \
+    ROS_ERROR("a message of size %i was " \
                 "predicted in tcpros.", len);
     conn->drop(Connection::Destructing);
     return;

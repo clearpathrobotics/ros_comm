@@ -169,7 +169,7 @@ void TransportPublisherLink::onMessageLength(const ConnectionPtr& conn, const bo
 
   if (len > 1000000)
   {
-    ROS_ERROR("a message of size %s was " \
+    ROS_ERROR("a message of size %i was " \
                 "predicted in tcpros.", len);
     drop();
     return;

@@ -393,7 +393,7 @@ void Connection::onHeaderLengthRead(const ConnectionPtr& conn, const boost::shar
 
   if (len > 1000000)
   {
-    ROS_ERROR("a header of size %s was " \
+    ROS_ERROR("a header of size %i was " \
                 "predicted in tcpros.", len);
     conn->drop(HeaderError);
   }
