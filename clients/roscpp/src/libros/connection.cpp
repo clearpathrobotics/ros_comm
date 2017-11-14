@@ -119,6 +119,8 @@ void Connection::readTransport()
   {
     ROS_ASSERT(read_buffer_);
     uint32_t to_read = read_size_ - read_filled_;
+    // NIM-4243 test
+    ROS_ASSERT(read_size_ >= read_filled_);
     if (to_read > 0)
     {
       int32_t bytes_read = transport_->read(read_buffer_.get() + read_filled_, to_read);
