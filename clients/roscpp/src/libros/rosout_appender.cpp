@@ -106,9 +106,9 @@ void ROSOutAppender::log(::ros::console::Level level, const char* str, const cha
   
   // check parameter server/cache for omit_topics flag
   // the same parameter is checked in rosout.py for the same purpose
-  ros::param::getCached("/rosout_disable_topics_generation", omit_topics_);
+  ros::param::getCached("/rosout_disable_topics_generation", disable_topics_);
 
-  if (!omit_topics_){
+  if (!disable_topics_){
     this_node::getAdvertisedTopics(msg->topics);
   }
 
