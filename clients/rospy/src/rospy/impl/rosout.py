@@ -96,6 +96,8 @@ def _rosout(level, msg, fname, line, func):
 
                     if not disable_topics_:
                         topics = get_topic_manager().get_topics()
+                    else:
+                        topics = ""
 
                     l = Log(level=level, name=str(rospy.names.get_caller_id()), msg=str(msg), topics=topics, file=fname, line=line, function=func)
                     l.header.stamp = Time.now()
